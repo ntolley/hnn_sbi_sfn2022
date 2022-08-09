@@ -1,0 +1,2 @@
+# HNN-SBI SfN 2022
+Analysis associated with poster "Simulation based inference in the Human Neocortical Neurosolver software reveals a calcium-mediated decoupling between spiking and field activity underlying macroscale"
