@@ -67,13 +67,24 @@ def run_hnn_sim(net, param_function, prior_dict, theta_samples, tstop, save_path
         seq_list.append(seq)
         
     # Load simulations into single array, save output, and remove small small files
-    x_files = [f'{save_path}/temp/x_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
+    dpl_files = [f'{save_path}/temp/dpl_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
+    spike_types_files = [f'{save_path}/temp/spike_types_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
+    spike_times_files = [f'{save_path}/temp/spike_times_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
+    spike_gids_files = [f'{save_path}/temp/spike_gids_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
     theta_files = [f'{save_path}/temp/theta_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
 
-    x_orig, theta_orig = load_prerun_simulations(x_files, theta_files)
-    x_name = f'{save_path}/sbi_sims/x_{save_suffix}.npy'
+    dpl_orig, spike_types_orig, spike_times_orig, spike_gids_orig, theta_orig = load_prerun_simulations(
+        dpl_files, spike_types_files, spike_times_files, spike_gids_files, theta_files)
+    
+    dpl_name = f'{save_path}/sbi_sims/dpl_{save_suffix}.npy'
+    spike_types_name = f'{save_path}/sbi_sims/spike_types_{save_suffix}.npy'
+    spike_times_name = f'{save_path}/sbi_sims/spike_times_{save_suffix}.npy'
+    spike_gids_name = f'{save_path}/sbi_sims/spike_gids_{save_suffix}.npy'
     theta_name = f'{save_path}/sbi_sims/theta_{save_suffix}.npy'
-    np.save(x_name, x_orig)
+    np.save(dpl_name, dpl_orig)
+    np.save(spike_types_name, spike_types_orig)
+    np.save(spike_times_name, spike_times_orig)
+    np.save(spike_gids_name, spike_gids_orig)
     np.save(theta_name, theta_orig)
 
     files = glob.glob(str(save_path) + '/temp/*')
@@ -240,24 +251,41 @@ def validate_posterior(net, nval_sims, param_function, data_path):
 # Create batch simulation function
 def batch(simulator, seq, theta_samples, save_path):
     print(f'Sim Idx: {(seq[0], seq[-1])}')
-    # Create lazy list of tasks
-    dipole_list = list()
-    spike_types_list = list()
-    spike_times_list = list()
-    spike_gids_list = list()
-    
+    # Create lazy list of tasks    
     for sim_idx in range(len(seq)):
         res = dask.delayed(simulator)(theta_samples[sim_idx,:])
         res_list.append(res)
 
     # Run tasks
     final_res = dask.compute(*res_list)
-    x_list = np.stack([final_res[idx][0] for idx in range(len(seq))])
+    
+    # Unpack dipole and spiking data
+    dpl_list = list()
+    spike_types_list = list()
+    spike_times_list = list()
+    spike_gids_list = list()
+    for res in final_res:
+        net_res = res[0][0]
+        dpl_res = res[0][1]
+        
+        dpl_list.append(dpl_res[0].copy().smooth(20).data['agg'])
+        spike_types_list.append(net_res.cell_response.spike_types[0])
+        spike_times_list.append(net_res.cell_response.spike_times[0])
+        spike_gids_list.append(net_res.cell_response.spike_gids[0])
 
-    x_name = f'{save_path}/temp/x_temp{seq[0]}-{seq[-1]}.npy'
+        
+    
+    dpl_name = f'{save_path}/temp/dpl_temp{seq[0]}-{seq[-1]}.npy'
+    spike_types_name = f'{save_path}/temp/spike_types_temp{seq[0]}-{seq[-1]}.npy'
+    spike_times_name = f'{save_path}/temp/spike_times_temp{seq[0]}-{seq[-1]}.npy'
+    spike_gids_name = f'{save_path}/temp/spike_gids_temp{seq[0]}-{seq[-1]}.npy'
+
     theta_name = f'{save_path}/temp/theta_temp{seq[0]}-{seq[-1]}.npy'
 
-    np.save(x_name, x_list)
+    np.save(dpl_name, dpl_list)
+    np.save(spike_types_name, spike_types_list)
+    np.save(spike_times_name, spike_times_list)
+    np.save(spike_gids_name, spike_gids_list)
     np.save(theta_name, theta_samples.detach().cpu().numpy())
 
 def linear_scale_forward(value, bounds, constrain_value=True):
@@ -536,7 +564,7 @@ def hnn_erp_param_function(net, theta_dict):
     n_drive_cells=1
     cell_specific=False
 
-    weights_ampa_d1 = {'L2_basket': theta_dict['dist1_l2basket'], 'L2_pyramidal': .000007,
+    weights_ampa_d1 = {'L2_basket': 0.006562, 'L2_pyramidal': .000007,
                        'L5_pyramidal': theta_dict['dist1_l5pyr']}
     weights_nmda_d1 = {'L2_basket': 0.019482, 'L2_pyramidal': 0.004317,
                        'L5_pyramidal': 0.080074}
@@ -545,12 +573,13 @@ def hnn_erp_param_function(net, theta_dict):
 
     weights_ampa_p1 = {'L2_basket': 0.08831, 'L2_pyramidal': 0.01525,
                        'L5_basket': 0.19934, 'L5_pyramidal': 0.00865}
+    
     synaptic_delays_prox = {'L2_basket': 0.1, 'L2_pyramidal': 0.1,
                             'L5_basket': 1., 'L5_pyramidal': 1.}
 
     weights_ampa_p2 = {'L2_basket': 0.000003, 'L2_pyramidal': 1.438840,
-                       'L5_basket': theta_dict['prox2_l5basket'], 'L5_pyramidal': theta_dict['prox2_l5pyr']}
-
+                       'L5_basket': 0.008958, 'L5_pyramidal': 0.684013}
+    
     net.add_evoked_drive(
         'evdist1', mu=63.53, sigma=3.85, numspikes=1, weights_ampa=weights_ampa_d1,
         weights_nmda=weights_nmda_d1, location='distal', n_drive_cells=n_drive_cells,
@@ -566,20 +595,32 @@ def hnn_erp_param_function(net, theta_dict):
         weights_ampa=weights_ampa_p2, location='proximal', n_drive_cells=n_drive_cells,
         cell_specific=cell_specific, synaptic_delays=synaptic_delays_prox, event_seed=4)
     
-def load_prerun_simulations(x_files, theta_files, downsample=1, save_name=None, save_data=False):
+def load_prerun_simulations(
+    dpl_files, spike_types_files, spike_times_files, spike_gids_files,
+    theta_files, downsample=1, save_name=None, save_data=False):
     "Aggregate simulation batches into single array"
     
-    print(x_files)
+    print(dpl_files)
+    print(spike_types_files)
+    print(spike_times_files)
+    print(spike_gids_files)
     print(theta_files)
     
-    x_all = np.vstack([np.load(x_files[file_idx])[:,::downsample] for file_idx in range(len(x_files))])
+    dpl_all = np.vstack([np.load(dpl_files[file_idx])[:,::downsample] for file_idx in range(len(dpl_files))])
+    spike_types_all = [np.load(spike_types_files[file_idx], allow_pickle=True) for file_idx in range(len(spike_types_files))]
+    spike_times_all = [np.load(spike_times_files[file_idx], allow_pickle=True) for file_idx in range(len(spike_times_files))]
+    spike_gids_all = [np.load(spike_gids_files[file_idx], allow_pickle=True) for file_idx in range(len(spike_gids_files))]
     theta_all = np.vstack([np.load(theta_files[file_idx]) for file_idx in range(len(theta_files))])
     
     if save_data and isinstance(save_name, str):
-        np.save(save_name + '_x_all.npy', dpl_all)
+        np.save(save_name + '_dpl_all.npy', dpl_all)
+        np.save(save_name + '_spike_types_all.npy', spike_types_all)
+        np.save(save_name + '_spike_times_all.npy', spike_times_all)
+        np.save(save_name + '_spike_gids_all.npy', spike_gids_all)
+
         np.save(save_name + '_theta_all.npy', theta_all)
     else:
-        return x_all, theta_all
+        return dpl_all, spike_types_all, spike_times_all, spike_gids_all, theta_all
     
 def get_parameter_recovery(theta_val, theta_cond, n_samples=10):
     """Calculate the PPC using root mean squared error
