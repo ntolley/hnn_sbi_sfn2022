@@ -17,6 +17,8 @@ from sklearn.decomposition import PCA
 import scipy
 
 from hnn_core import jones_2009_model, simulate_dipole, pick_connection
+from hnn_core.cells_default import _linear_g_at_dist, _exp_g_at_dist, pyramidal
+from hnn_core.params import _short_name
 rng_seed = 123
 rng = np.random.default_rng(rng_seed)
 torch.manual_seed(rng_seed)
@@ -505,7 +507,7 @@ def pyramidal_ca_custom(cell_name, pos, override_params=None, gid=None,
     override_params['L5Pyr_soma_gnabar_hh2'] = 0.32
 
     gbar_ca = partial(
-        _linear_g_at_dist, gsoma=ca_gsoma., gdend=ca_gdend., xkink=1501)
+        _linear_g_at_dist, gsoma=ca_gsoma, gdend=ca_gdend, xkink=1501)
     gbar_na = partial(
         _linear_g_at_dist, gsoma=override_params['L5Pyr_soma_gnabar_hh2'],
         gdend=28e-4, xkink=962)
