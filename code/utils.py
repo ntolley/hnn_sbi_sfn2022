@@ -49,7 +49,7 @@ def run_hnn_sim(net, param_function, prior_dict, theta_samples, tstop, save_path
     
     # create simulator object, rescale function transforms (0,1) to range specified in prior_dict    
     simulator = partial(simulator_hnn, prior_dict=prior_dict, param_function=param_function,
-                        network_model=net, tstop=tstop)
+                        network_model=net, tstop=tstop, return_objects=True)
     # Generate simulations
     seq_list = list()
     num_sims = theta_samples.shape[0]
@@ -76,55 +76,17 @@ def run_hnn_sim(net, param_function, prior_dict, theta_samples, tstop, save_path
 
     files = glob.glob(str(save_path) + '/temp/*')
     for f in files:
-        os.remove(f)
-        
-def run_rc_sim(prior_dict, theta_samples, tstop, save_path, save_suffix):
-    """Run RC circuit simulations
-    
-    Parameters
-    ----------
-    prior_dict: dict 
-        Dictionary storing information to map uniform sampled parameters to prior distribution.
-        Form of {'param_name': {'bounds': (lower_bound, upper_bound), 'scale_func': callable}}.
-    theta_samples: array-like
-        Unscaled paramter values in range of (0,1) sampled from prior distribution
-    tstop: int
-        Simulation stop time (ms)
-    save_path: str
-        Location to store simulations. Must have subdirectories 'sbi_sims/' and 'temp/'
-    save_suffix: str
-        Name appended to end of output files
-    """
-    # Generate simulations
-    num_sims = theta_samples.shape[0]
-    step_size = num_cores
-
-    v_list = list()
-    for sim_idx in range(num_sims):
-        if sim_idx % 1000 == 0:
-            print(sim_idx, end=' ')
-     
-        v_out = simulator_rc(theta_samples[sim_idx, :].squeeze(), prior_dict, tstop=tstop)
-        v_list.append(v_out)
-        
-    # Save simulation output
-    x_sims = np.hstack(v_list).T
-    theta_sims = theta_samples.numpy()
-
-    x_name = f'{save_path}/sbi_sims/x_{save_suffix}.npy'
-    theta_name = f'{save_path}/sbi_sims/theta_{save_suffix}.npy'
-    np.save(x_name, x_sims)
-    np.save(theta_name, theta_sims)     
+        os.remove(f) 
         
 def start_cluster():
     """Reserve SLURM resources using Dask Distributed interface"""
      # Set up cluster and reserve resources
     cluster = SLURMCluster(
-        cores=32, processes=32, queue='compute', memory="256GB", walltime="10:00:00",
+        cores=32, processes=32, queue='compute', memory="256GB", walltime="5:00:00",
         job_extra=['-A csd403', '--nodes=1'], log_directory=os.getcwd() + '/slurm_out')
 
     client = Client(cluster)
-    client.upload_file('../utils.py')
+    client.upload_file('utils.py')
     print(client.dashboard_link)
     
     client.cluster.scale(num_cores)
@@ -272,68 +234,16 @@ def validate_posterior(net, nval_sims, param_function, data_path):
         save_suffix = f'{input_type}_validation'
         run_hnn_sim(net=net, param_function=param_function, prior_dict=prior_dict,
                 theta_samples=theta_samples, tstop=tstop, save_path=data_path, save_suffix=save_suffix)
-    
-    
-# Temporary hack to run rc validation sims
-def validate_rc_posterior(nval_sims, data_path):
-        
-    # Open relevant files
-    with open(f'{data_path}/posteriors/posterior_dicts.pkl', 'rb') as output_file:
-        posterior_state_dicts = dill.load(output_file)
-    with open(f'{data_path}/sbi_sims/prior_dict.pkl', 'rb') as output_file:
-        prior_dict = dill.load(output_file)
-    with open(f'{data_path}/sbi_sims/sim_metadata.pkl', 'rb') as output_file:
-        sim_metadata = dill.load(output_file)
-    with open(f'{data_path}/posteriors/posterior_metadata.pkl', 'rb') as output_file:
-        posterior_metadata = dill.load(output_file)
-
-    dt = sim_metadata['dt'] # Sampling interval used for simulation
-    tstop = sim_metadata['tstop'] # Sampling interval used for simulation
-    window_samples = posterior_metadata['window_samples']
-
-
-    prior = UniformPrior(parameters=list(prior_dict.keys()))
-
-    # x_orig stores full waveform to be used for embedding
-    x_orig, theta_orig = np.load(f'{data_path}/sbi_sims/x_sbi.npy'), np.load(f'{data_path}/sbi_sims/theta_sbi.npy')
-    x_cond, theta_cond = np.load(f'{data_path}/sbi_sims/x_grid.npy'), np.load(f'{data_path}/sbi_sims/theta_grid.npy')
-
-    x_orig = x_orig[:, window_samples[0]:window_samples[1]]
-    x_cond = x_cond[:, window_samples[0]:window_samples[1]]
-
-    load_info = {name: {'x_train': posterior_dict['input_dict']['feature_func'](x_orig), 
-                        'x_cond': posterior_dict['input_dict']['feature_func'](x_cond)}
-                 for name, posterior_dict in posterior_state_dicts.items()}
-
-
-    for input_type, posterior_dict in posterior_state_dicts.items():
-        state_dict = posterior_dict['posterior']
-        input_dict = posterior_dict['input_dict']
-        embedding_net =  input_dict['embedding_func'](**input_dict['embedding_dict'])
-        
-        posterior = load_posterior(state_dict=state_dict,
-                                   x_infer=torch.tensor(load_info[input_type]['x_train'][:10,:]).float(),
-                                   theta_infer=torch.tensor(theta_orig[:10,:]), prior=prior, embedding_net=embedding_net)
-
-
-        samples_list = list()
-        for cond_idx in range(x_cond.shape[0]):
-            if cond_idx % 100 == 0:    
-                print(cond_idx, end=' ')
-            samples = posterior.sample((nval_sims,), x=load_info[input_type]['x_cond'][cond_idx,:])
-            samples_list.append(samples)
-
-        theta_samples = torch.tensor(np.vstack(samples_list))
-
-        save_suffix = f'{input_type}_validation'
-        run_rc_sim(prior_dict, theta_samples, tstop, data_path, save_suffix)
-        
 
 # Create batch simulation function
 def batch(simulator, seq, theta_samples, save_path):
     print(f'Sim Idx: {(seq[0], seq[-1])}')
     # Create lazy list of tasks
-    res_list= []
+    dipole_list = list()
+    spike_types_list = list()
+    spike_times_list = list()
+    spike_gids_list = list()
+    
     for sim_idx in range(len(seq)):
         res = dask.delayed(simulator)(theta_samples[sim_idx,:])
         res_list.append(res)
@@ -423,6 +333,12 @@ def get_dataset_peaks(x_raw, tstop=500):
          np.min(x_raw,axis=1), ts[np.argmin(x_raw, axis=1)]]).T
 
     return peak_features
+
+def get_dataset_spike_rate(x_spike_types):
+    """Return cell type specific firing rate for recording"""
+    
+    return spike_rates
+    
 
 def psd_peak_func(x_raw, fs, tstop):
     x_psd = get_dataset_psd(x_raw, fs=fs, return_freq=False)
@@ -578,8 +494,42 @@ def simulator_hnn(theta, prior_dict, param_function, network_model,
         x = torch.stack(x)
         return torch.tensor(x, dtype=torch.float32)
     
+def pyramidal_ca_custom(cell_name, pos, override_params=None, gid=None,
+                        ca_gsoma=10.0, ca_gdend=40.0):
+    """Calcium dynamics."""
+
+    if override_params is None:
+        override_params = dict()
+
+    override_params['L5Pyr_soma_gkbar_hh2'] = 0.06
+    override_params['L5Pyr_soma_gnabar_hh2'] = 0.32
+
+    gbar_ca = partial(
+        _linear_g_at_dist, gsoma=ca_gsoma., gdend=ca_gdend., xkink=1501)
+    gbar_na = partial(
+        _linear_g_at_dist, gsoma=override_params['L5Pyr_soma_gnabar_hh2'],
+        gdend=28e-4, xkink=962)
+    gbar_k = partial(
+        _exp_g_at_dist, zero_val=override_params['L5Pyr_soma_gkbar_hh2'],
+        exp_term=-0.006, offset=1e-4)
+
+    override_params['L5Pyr_dend_gbar_ca'] = gbar_ca
+    override_params['L5Pyr_dend_gnabar_hh2'] = gbar_na
+    override_params['L5Pyr_dend_gkbar_hh2'] = gbar_k
+
+    cell = pyramidal(cell_name, pos, override_params=override_params,
+                     gid=gid)
+
+    return cell
 
 def hnn_erp_param_function(net, theta_dict):
+    # Replace L5 pyramidal cell template with updated calcium
+    cell_name = 'L5_pyramidal'
+    pos = net.cell_types[cell_name].pos
+    net.cell_types[cell_name] = pyramidal_ca_custom(
+        cell_name=_short_name(cell_name), pos=pos,
+        ca_gsoma=theta_dict['ca_gsoma'], ca_gdend=theta_dict['ca_gdend'])
+    
     # Add ERP drives
     n_drive_cells=1
     cell_specific=False
