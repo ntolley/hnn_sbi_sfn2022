@@ -81,6 +81,7 @@ def run_hnn_sim(net, param_function, prior_dict, theta_samples, tstop, save_path
     spike_times_name = f'{save_path}/sbi_sims/spike_times_{save_suffix}.npy'
     spike_gids_name = f'{save_path}/sbi_sims/spike_gids_{save_suffix}.npy'
     theta_name = f'{save_path}/sbi_sims/theta_{save_suffix}.npy'
+    
     np.save(dpl_name, dpl_orig)
     np.save(spike_types_name, spike_types_orig)
     np.save(spike_times_name, spike_times_orig)
@@ -90,7 +91,7 @@ def run_hnn_sim(net, param_function, prior_dict, theta_samples, tstop, save_path
     files = glob.glob(str(save_path) + '/temp/*')
     for f in files:
         os.remove(f) 
-        
+
 def start_cluster():
     """Reserve SLURM resources using Dask Distributed interface"""
      # Set up cluster and reserve resources
@@ -251,6 +252,7 @@ def validate_posterior(net, nval_sims, param_function, data_path):
 # Create batch simulation function
 def batch(simulator, seq, theta_samples, save_path):
     print(f'Sim Idx: {(seq[0], seq[-1])}')
+    res_list = list()
     # Create lazy list of tasks    
     for sim_idx in range(len(seq)):
         res = dask.delayed(simulator)(theta_samples[sim_idx,:])
