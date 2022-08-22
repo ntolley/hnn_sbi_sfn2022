@@ -68,22 +68,19 @@ def run_hnn_sim(net, param_function, prior_dict, theta_samples, tstop, save_path
         
     # Load simulations into single array, save output, and remove small small files
     dpl_files = [f'{save_path}/temp/dpl_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
-    spike_types_files = [f'{save_path}/temp/spike_types_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
     spike_times_files = [f'{save_path}/temp/spike_times_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
     spike_gids_files = [f'{save_path}/temp/spike_gids_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
     theta_files = [f'{save_path}/temp/theta_temp{seq[0]}-{seq[-1]}.npy' for seq in seq_list]
 
-    dpl_orig, spike_types_orig, spike_times_orig, spike_gids_orig, theta_orig = load_prerun_simulations(
-        dpl_files, spike_types_files, spike_times_files, spike_gids_files, theta_files)
+    dpl_orig, spike_times_orig, spike_gids_orig, theta_orig = load_prerun_simulations(
+        dpl_files, spike_times_files, spike_gids_files, theta_files)
     
     dpl_name = f'{save_path}/sbi_sims/dpl_{save_suffix}.npy'
-    spike_types_name = f'{save_path}/sbi_sims/spike_types_{save_suffix}.npy'
     spike_times_name = f'{save_path}/sbi_sims/spike_times_{save_suffix}.npy'
     spike_gids_name = f'{save_path}/sbi_sims/spike_gids_{save_suffix}.npy'
     theta_name = f'{save_path}/sbi_sims/theta_{save_suffix}.npy'
     
     np.save(dpl_name, dpl_orig)
-    np.save(spike_types_name, spike_types_orig)
     np.save(spike_times_name, spike_times_orig)
     np.save(spike_gids_name, spike_gids_orig)
     np.save(theta_name, theta_orig)
@@ -119,9 +116,11 @@ def train_posterior(data_path, ntrain_sims, x_noise_amp, theta_noise_amp, window
     limits = list(prior_dict.values())
 
     # x_orig stores full waveform to be used for embedding
-    x_orig, theta_orig = np.load(f'{data_path}/sbi_sims/x_sbi.npy'), np.load(f'{data_path}/sbi_sims/theta_sbi.npy')
+    x_orig, theta_orig = np.load(f'{data_path}/sbi_sims/dpl_sbi.npy'), np.load(f'{data_path}/sbi_sims/theta_sbi.npy')
     x_orig, theta_orig = x_orig[:ntrain_sims, window_samples[0]:window_samples[1]], theta_orig[:ntrain_sims, :]
 
+    spike_gids_orig = np.load(f'{data_path}/sbi_sims/spike_gids_sbi.npy', allow_pickle=True)
+    spike_gids_orig = spike_gids_orig[:ntrain_sims]
 
     # Add noise for regularization
     x_noise = rng.normal(loc=0.0, scale=x_noise_amp, size=x_orig.shape)
@@ -138,36 +137,32 @@ def train_posterior(data_path, ntrain_sims, x_noise_amp, theta_noise_amp, window
     
     pca30 = PCA(n_components=30, random_state=rng_seed)
     pca30.fit(x_orig_noise)
+    
+    spike_rate_func = partial(get_dataset_spike_rates, gid_ranges=sim_metadata['gid_ranges'])
 
     posterior_metadata = {'rng_seed': rng_seed, 'x_noise_amp': x_noise_amp, 'theta_noise_amp': theta_noise_amp,
                           'ntrain_sims': ntrain_sims, 'fs': fs, 'window_samples': window_samples}
     posterior_metadata_save_label = f'{data_path}/posteriors/posterior_metadata.pkl'
     with open(posterior_metadata_save_label, 'wb') as output_file:
             dill.dump(posterior_metadata, output_file)
+            
+    raw_data_type = {'dpl': x_orig_noise, 'spike_gids': spike_gids_orig}
 
-    input_type_list = {'raw_waveform': {
-                           'embedding_func': torch.nn.Identity,
-                           'embedding_dict': dict(), 'feature_func': torch.nn.Identity()},
+    input_type_list = {#'raw_waveform': {
+                       #    'embedding_func': torch.nn.Identity,
+                       #    'embedding_dict': dict(), 'feature_func': torch.nn.Identity(),
+                       #    'data_type': 'dpl'},
         
-                       'pca4': {
-                           'embedding_func': torch.nn.Identity,
-                           'embedding_dict': dict(), 'feature_func': pca4.transform},
-                       'pca30': {
-                           'embedding_func': torch.nn.Identity,
-                           'embedding_dict': dict(), 'feature_func': pca30.transform},
-                       'peak': {
-                           'embedding_func': torch.nn.Identity,
-                           'embedding_dict': dict(), 'feature_func': partial(get_dataset_peaks, tstop=sim_metadata['tstop'])},
-                       'bandpower': {
-                           'embedding_func': torch.nn.Identity,
-                           'embedding_dict': dict(), 'feature_func': partial(get_dataset_bandpower, fs=fs)}}
+                       #'pca30': {
+                       #    'embedding_func': torch.nn.Identity,
+                       #    'embedding_dict': dict(), 'feature_func': pca30.transform, 
+                       #    'data_type': 'dpl'},
     
-                       #'psd': {
-                       #    'embedding_func': torch.nn.Identity,
-                       #    'embedding_dict': dict(), 'feature_func': partial(get_dataset_psd, fs=fs, return_freq=False)},
-                       #'psd_peak': {
-                       #    'embedding_func': torch.nn.Identity,
-                       #    'embedding_dict': dict(), 'feature_func': partial(psd_peak_func, fs=fs, tstop=sim_metadata['tstop'])}}
+                       'spike_rates': {
+                           'embedding_func': torch.nn.Identity,
+                           'embedding_dict': dict(), 'feature_func': spike_rate_func,
+                           'data_type': 'spike_gids'}}
+    
 
     # Train a posterior for each input type and save state_dict
     for input_type, input_dict in input_type_list.items():
@@ -175,7 +170,7 @@ def train_posterior(data_path, ntrain_sims, x_noise_amp, theta_noise_amp, window
 
         neural_posterior = sbi_utils.posterior_nn(model='maf', embedding_net=input_dict['embedding_func'](**input_dict['embedding_dict']))
         inference = sbi_inference.SNPE(prior=prior, density_estimator=neural_posterior, show_progress_bars=True, device=device)
-        x_train = torch.tensor(input_dict['feature_func'](x_orig_noise)).float()
+        x_train = torch.tensor(input_dict['feature_func'](raw_data_type[input_dict['data_type']])).float()
         theta_train = torch.tensor(theta_orig_noise).float()
         if x_train.dim() == 1:
             x_train= x_train.reshape(-1, 1)
@@ -263,7 +258,6 @@ def batch(simulator, seq, theta_samples, save_path):
     
     # Unpack dipole and spiking data
     dpl_list = list()
-    spike_types_list = list()
     spike_times_list = list()
     spike_gids_list = list()
     for res in final_res:
@@ -271,21 +265,18 @@ def batch(simulator, seq, theta_samples, save_path):
         dpl_res = res[0][1]
         
         dpl_list.append(dpl_res[0].copy().smooth(20).data['agg'])
-        spike_types_list.append(net_res.cell_response.spike_types[0])
         spike_times_list.append(net_res.cell_response.spike_times[0])
         spike_gids_list.append(net_res.cell_response.spike_gids[0])
 
         
     
     dpl_name = f'{save_path}/temp/dpl_temp{seq[0]}-{seq[-1]}.npy'
-    spike_types_name = f'{save_path}/temp/spike_types_temp{seq[0]}-{seq[-1]}.npy'
     spike_times_name = f'{save_path}/temp/spike_times_temp{seq[0]}-{seq[-1]}.npy'
     spike_gids_name = f'{save_path}/temp/spike_gids_temp{seq[0]}-{seq[-1]}.npy'
 
     theta_name = f'{save_path}/temp/theta_temp{seq[0]}-{seq[-1]}.npy'
 
     np.save(dpl_name, dpl_list)
-    np.save(spike_types_name, spike_types_list)
     np.save(spike_times_name, spike_times_list)
     np.save(spike_gids_name, spike_gids_list)
     np.save(theta_name, theta_samples.detach().cpu().numpy())
@@ -366,10 +357,23 @@ def get_dataset_peaks(x_raw, tstop=500):
 
     return peak_features
 
-def get_dataset_spike_rate(x_spike_types):
+def get_dataset_spike_rates(spike_gids, gid_ranges=None):
     """Return cell type specific firing rate for recording"""
+    cell_names = ['L2_basket', 'L2_pyramidal', 'L2_basket', 'L5_pyramidal']
     
-    return spike_rates
+    spike_rates_all = list()
+    for sim_idx in range(len(spike_gids)):
+        spike_rates_list = list()
+        for name in cell_names:
+            spike_rates_list.append(
+                np.sum(
+                    np.in1d(spike_gids[sim_idx], gid_ranges[name])))
+        
+        spike_rates_all.append(spike_rates_list)
+        
+    spike_rates_all = np.vstack(spike_rates_all)
+    
+    return spike_rates_all
     
 
 def psd_peak_func(x_raw, fs, tstop):
@@ -598,31 +602,39 @@ def hnn_erp_param_function(net, theta_dict):
         cell_specific=cell_specific, synaptic_delays=synaptic_delays_prox, event_seed=4)
     
 def load_prerun_simulations(
-    dpl_files, spike_types_files, spike_times_files, spike_gids_files,
+    dpl_files, spike_times_files, spike_gids_files,
     theta_files, downsample=1, save_name=None, save_data=False):
     "Aggregate simulation batches into single array"
     
     print(dpl_files)
-    print(spike_types_files)
     print(spike_times_files)
     print(spike_gids_files)
     print(theta_files)
+        
+    dpl_all, spike_times_all, spike_gids_all, theta_all = list(), list(), list(), list()
     
-    dpl_all = np.vstack([np.load(dpl_files[file_idx])[:,::downsample] for file_idx in range(len(dpl_files))])
-    spike_types_all = [np.load(spike_types_files[file_idx], allow_pickle=True) for file_idx in range(len(spike_types_files))]
-    spike_times_all = [np.load(spike_times_files[file_idx], allow_pickle=True) for file_idx in range(len(spike_times_files))]
-    spike_gids_all = [np.load(spike_gids_files[file_idx], allow_pickle=True) for file_idx in range(len(spike_gids_files))]
-    theta_all = np.vstack([np.load(theta_files[file_idx]) for file_idx in range(len(theta_files))])
+    for file_idx in range(len(dpl_files)):
+        dpl_all.append(np.load(dpl_files[file_idx])[:,::downsample])
+        theta_all.append(np.load(theta_files[file_idx]))
+        
+        spike_times_list = np.load(spike_times_files[file_idx], allow_pickle=True)
+        spike_gids_list = np.load(spike_gids_files[file_idx], allow_pickle=True)
+        
+        for sim_idx in range(len(spike_times_list)):
+            spike_times_all.append(spike_times_list[sim_idx])
+            spike_gids_all.append(spike_gids_list[sim_idx])
+    
+    dpl_all = np.vstack(dpl_all)
+    theta_all = np.vstack(theta_all)
     
     if save_data and isinstance(save_name, str):
         np.save(save_name + '_dpl_all.npy', dpl_all)
-        np.save(save_name + '_spike_types_all.npy', spike_types_all)
         np.save(save_name + '_spike_times_all.npy', spike_times_all)
         np.save(save_name + '_spike_gids_all.npy', spike_gids_all)
 
         np.save(save_name + '_theta_all.npy', theta_all)
     else:
-        return dpl_all, spike_types_all, spike_times_all, spike_gids_all, theta_all
+        return dpl_all, spike_times_all, spike_gids_all, theta_all
     
 def get_parameter_recovery(theta_val, theta_cond, n_samples=10):
     """Calculate the PPC using root mean squared error
