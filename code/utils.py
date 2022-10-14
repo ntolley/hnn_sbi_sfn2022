@@ -139,6 +139,8 @@ def train_posterior(data_path, ntrain_sims, x_noise_amp, theta_noise_amp, window
     pca30.fit(x_orig_noise)
     
     spike_rate_func = partial(get_dataset_spike_rates, gid_ranges=sim_metadata['gid_ranges'])
+    
+    pca4_spike_rate_func = partial(get_dataset_pca4_spike_rates, gid_ranges=sim_metadata['gid_ranges'], pca4=pca4)
 
     posterior_metadata = {'rng_seed': rng_seed, 'x_noise_amp': x_noise_amp, 'theta_noise_amp': theta_noise_amp,
                           'ntrain_sims': ntrain_sims, 'fs': fs, 'window_samples': window_samples}
@@ -146,22 +148,39 @@ def train_posterior(data_path, ntrain_sims, x_noise_amp, theta_noise_amp, window
     with open(posterior_metadata_save_label, 'wb') as output_file:
             dill.dump(posterior_metadata, output_file)
             
-    raw_data_type = {'dpl': x_orig_noise, 'spike_gids': spike_gids_orig}
+    raw_data_type = {'dpl': x_orig_noise, 'spike_gids': spike_gids_orig,
+                     'dpl_spike_gids': {'dpl': x_orig_noise, 'spike_gids': spike_gids_orig}}
 
-    input_type_list = {#'raw_waveform': {
-                       #    'embedding_func': torch.nn.Identity,
-                       #    'embedding_dict': dict(), 'feature_func': torch.nn.Identity(),
-                       #    'data_type': 'dpl'},
+    input_type_list = {'pca4_spike_rates': {
+                           'embedding_func': torch.nn.Identity,
+                           'embedding_dict': dict(), 'feature_func': pca4_spike_rate_func,
+                           'data_type': 'dpl_spike_gids'},
         
-                       #'pca30': {
-                       #    'embedding_func': torch.nn.Identity,
-                       #    'embedding_dict': dict(), 'feature_func': pca30.transform, 
-                       #    'data_type': 'dpl'},
+                        'raw_waveform': {
+                           'embedding_func': torch.nn.Identity,
+                           'embedding_dict': dict(), 'feature_func': torch.nn.Identity(),
+                           'data_type': 'dpl'},
+        
+                       'pca30': {
+                           'embedding_func': torch.nn.Identity,
+                           'embedding_dict': dict(), 'feature_func': pca30.transform, 
+                           'data_type': 'dpl'},
+                       
+                       'pca4': {
+                           'embedding_func': torch.nn.Identity,
+                           'embedding_dict': dict(), 'feature_func': pca4.transform, 
+                           'data_type': 'dpl'},
     
                        'spike_rates': {
                            'embedding_func': torch.nn.Identity,
                            'embedding_dict': dict(), 'feature_func': spike_rate_func,
-                           'data_type': 'spike_gids'}}
+                           'data_type': 'spike_gids'},
+                       
+                       #'pca4_spike_rates': {
+                       #    'embedding_func': torch.nn.Identity,
+                       #    'embedding_dict': dict(), 'feature_func': pca4_spike_rate_func,
+                       #    'data_type': 'dpl_spike_gids'}
+                      }
     
 
     # Train a posterior for each input type and save state_dict
@@ -374,6 +393,16 @@ def get_dataset_spike_rates(spike_gids, gid_ranges=None):
     spike_rates_all = np.vstack(spike_rates_all)
     
     return spike_rates_all
+
+def get_dataset_pca4_spike_rates(sim_data, gid_ranges, pca4):
+    """Concatenate PCA4 and spike rates"""    
+    dpl_pca4 = pca4.fit_transform(sim_data['dpl'])
+    
+    spike_rates = get_dataset_spike_rates(sim_data['spike_gids'], gid_ranges)
+
+    pca4_spike_rates = np.hstack([dpl_pca4, spike_rates])
+    
+    return pca4_spike_rates
     
 
 def psd_peak_func(x_raw, fs, tstop):
