@@ -396,7 +396,7 @@ def get_dataset_spike_rates(spike_gids, gid_ranges=None):
 
 def get_dataset_pca4_spike_rates(sim_data, gid_ranges, pca4):
     """Concatenate PCA4 and spike rates"""    
-    dpl_pca4 = pca4.fit_transform(sim_data['dpl'])
+    dpl_pca4 = pca4.transform(sim_data['dpl'])
     
     spike_rates = get_dataset_spike_rates(sim_data['spike_gids'], gid_ranges)
 
